@@ -1,0 +1,231 @@
+---
+title: "scrna-analysis-seurat"
+author: "Aditya Mahadevan"
+date: '2022-04-11'
+output: html_document
+---
+
+```{r}
+## Load libraries ##
+library(Seurat)
+library(tidyverse)
+library(ggpubr)
+library(Matrix)
+```
+
+
+```{r}
+## Get the data ##
+# Download and untar the dataset
+download.file(dataset_url, method = "curl",
+              destfile = "Parent_SC3v3_Human_Glioblastoma_filtered_feature_bc_matrix.h5")
+
+# Generate a Seurat object from the matrix
+gbm.mat <- Read10X_h5("Parent_SC3v3_Human_Glioblastoma_filtered_feature_bc_matrix.h5")
+gbm <- CreateSeuratObject(gbm.mat)
+```
+
+```{r}
+#Do QC of the GBM data##
+# Percent MT content
+gbm$percent.mt <- PercentageFeatureSet(gbm, pattern = "^MT-")
+
+# QC plots using Seurat functions
+VlnPlot(gbm, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3) 
+FeatureScatter(gbm, feature1 = "nCount_RNA", feature2 = "percent.mt")
+FeatureScatter(gbm, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+# Subset the data based on the cutoffs
+gbm <- subset(gbm, subset = nFeature_RNA > 200 & nFeature_RNA < 8000 & percent.mt < 20)
+```
+
+```{r}
+## Normalize and Scale ##
+
+# Log-transform the counts
+gbm <- NormalizeData(gbm)
+
+# Find Variable Features
+gbm <- FindVariableFeatures(gbm)
+
+# Scale the data
+gbm <- ScaleData(gbm)
+```
+
+```{r}
+## Use a pipe instead ##
+gbmraw <- CreateSeuratObject(mat)
+
+# QC/Norm/scale pipeline
+gbmraw %>%
+  PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>%
+  subset(subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData()
+
+# QC/Norm/scale pipeline (save the results to a variable)
+gbm <- gbmraw %>%
+  PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>%
+  subset(subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData()
+
+# Plotting the QC data using pipes
+gbmraw %>%
+  PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>%
+  subset(subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  FeatureScatter(feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+# LEts use ggplot2 to beautify the plot
+gbmraw %>%
+  PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>%
+  subset(subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  pluck("meta.data") %>%
+  ggplot(aes(y = percent.mt, x = nCount_RNA)) +
+  geom_point() +
+  theme_bw()
+```
+
+
+```{r}
+#Principal Component Analysis
+# Run PCA
+gbm <- RunPCA(gbm)
+
+# Plot PCs 1 and 2
+DimPlot(gbm)
+
+# What are the genes that determine PC1 and PC2?
+VizDimLoadings(gbm, dims = 1:2)
+
+# FeaturePlot of PC1 top features
+FeaturePlot(gbm, features = c("", "")) #see the the above output for genes that can be plotted
+
+# FeaturePlot of PC2 top features
+FeaturePlot(gbm, features = c("", ""))
+
+# Select number of PCs
+ElbowPlot(gbm, ndims = 50)
+```
+
+```{r}
+gbm <- FindNeighbors(gbm, dims = 1:10)
+
+# Find the clusters
+gbm <- FindClusters(gbm, resolution = 0.5)
+
+# Get the UMAP embedding
+gbm <- RunUMAP(gbm, dims = 1:10)
+
+# Plot the UMAP with clustering
+DimPlot(gbm, reduction = "umap")
+
+# Get the TSNE embedding
+gbm <- RunTSNE(gbm, dims = 1:10)
+
+# Plot the tsne with clustering
+DimPlot(gbm, reduction = "tsne")
+
+# UMAP for PBMC
+DimPlot(gbm, reduction = "umap")
+```
+
+
+```{r}
+# Lets design a pipeline to run all previous steps using pipes
+gbm <- CreateSeuratObject(Read10X_h5("Parent_SC3v3_Human_Glioblastoma_filtered_feature_bc_matrix.h5")) %>%
+  PercentageFeatureSet(pattern = "^MT-", col.name = "percent.mt") %>%
+  subset(subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5) %>%
+  NormalizeData() %>%
+  FindVariableFeatures() %>%
+  ScaleData() %>%
+  RunPCA() %>% 
+  FindNeighbors(dims = 1:10) %>%
+  FindClusters(resolution = 0.5) %>%
+  RunUMAP(dims = 1:10)
+```
+
+```{r}
+#Finding Cluster Markers#
+
+# UMAP for GBM
+DimPlot(gbm, reduction = "umap")
+
+# Find markers for cluster 3
+cluster3.markers <- FindMarkers(gbm, ident.1 = 3, 
+                                only.pos = TRUE,
+                                logfc.threshold = .5,
+                                min.pct = 0.25)
+cluster3.markers %>%
+  top_n(5, -log10(p_val))
+
+# Feature plot for top 2 Cluster 3 markers
+FeaturePlot(gbm, features = c("", ""))
+# Violin top 2 Plot
+VlnPlot(gbm, features = c("", ""))
+
+# Find markers of 0, 2, 4, and 6
+cluster0246.markers <- FindMarkers(gbm, ident.1 = c(0, 2, 4, 6),
+                                   logfc.threshold = .5, only.pos = TRUE,
+                                   min.pct = 0.25)
+cluster0246.markers %>%
+  top_n(5, -log10(p_val))
+# Feature plot for 0, 2, 4, 6 markers
+FeaturePlot(gbm, features = c("IL32", "CD3D"))
+# Violin Plot
+VlnPlot(gbm, features = c("IL32", "CD3D"))
+```
+
+```{r}
+marker_list_brain <- list(
+  'Oligodendrocytes' = c("Plp1", "Mag", "Cnp"),
+  'OPCs' = c('Pdgfra', 'C1ql1', 'Cntn1'),
+  'Endothelial Cells' = c("Ly6c1", "Esam", "Pecam1"),
+  "Neurons" = c("Meg3", "Snap25", "Syt1"),
+  'Astrocytes' = c("Gfap", "Sox9", "Slc1a2"),
+  'Pericyte' = c("Mcam", "Pdgfrb"),
+  "Neuroepithelial Cells" = c("Krt5", "Krt15")
+)
+
+```
+
+```{r}
+#we can use feature and Vln Plots for the above marker lists to get user-defined annotations of single cell clusters
+# OPCs
+FeaturePlot(gbm, features = marker_list$`OPCs`)
+VlnPlot(gbm, features = marker_list$`OPCs`)
+
+#Lets create a function that automatically generates a FeaturePlot and Vlnplot for each of the marker list annotations
+# Do all VlnPlots at once automatically and save
+marker_vln <- function(srt, marker_list, marker_now) {
+  vln <- VlnPlot(srt, features = marker_list[[marker_now]]) +
+    patchwork::plot_annotation(title = marker_now,
+                               theme = theme(title = element_text(size = 22)))
+  return(vln)
+}
+vlnList <- lapply(names(marker_list), marker_vln, 
+                  srt = pbmc, marker_list = marker_list)
+ga <- ggarrange(plotlist = vlnList)
+ggsave(ga, filename = "arranged_gbms_violins.png", height = 10, width = 20)
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
+```{r}
+```
+
